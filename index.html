@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PCB Designer - Pro Editor</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; }
+        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 10px; align-items: center; border-bottom: 2px solid #444; flex-wrap: wrap; z-index: 10; }
+        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; overflow: auto; }
+        canvas { background: #002b1a; border: 2px solid #333; cursor: crosshair; }
+        .btn { background: #444; color: white; border: 1px solid #666; padding: 6px 12px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 5px; }
+        .btn:hover { background: #555; }
+        .btn.active { background: #007acc; border-color: #00bfff; }
+        .btn-danger { background: #c0392b; }
+        .btn-undo { background: #7f8c8d; }
+        .unit-toggle { background: #27ae60; font-weight: bold; }
+        input { width: 45px; background: #333; color: white; border: 1px solid #555; padding: 4px; border-radius: 3px; }
+        .divider { width: 1px; height: 25px; background: #555; margin: 0 5px; }
+    </style>
+</head>
+<body>
+
+<div id="toolbar">
+    <div style="display:flex; gap:5px;">
+        <button id="btnMove" class="btn active" onclick="setMode('MOVE')">✥ Move</button>
+        <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ Wire</button>
+    </div>
+    <div class="divider"></div>
+    <button class="btn btn-undo" onclick="undo()">↶ Undo</button>
+    <button id="btnDelete" class="btn btn-danger" onclick="deleteSelected()" disabled>🗑 Delete</button>
+    <div class="divider"></div>
+    <button class="btn" onclick="addComponent('resistor')">+ Resistor</button>
+    <button class="btn" onclick="addComponent('capacitor')">+ Cap</button>
+    <button class="btn" onclick="addComponent('transistor')">+ TO-92</button>
+    <div class="divider"></div>
+    <button class="btn unit-toggle" id="unitBtn" onclick="toggleUnits()">CM</button>
+    <input type="number" id="pcbW" value="10" onchange="updateBoard()"> x 
+    <input type="number" id="pcbH" value="8" onchange="updateBoard()">
+    <button class="btn" onclick="rotateSelected()" style="background:#8e44ad">↻ Rotate</button>
+</div>
+
+<div id="canvas-container">
+    <canvas id="pcbCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('pcbCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let currentUnit = 'CM';
+    let ppi = 38;
+    let components = [];
+    let traces = [];
+    let history = [];
+    
+    let mode = 'MOVE';
+    let selectedID = null; // ID of selected component or trace
+    let isDragging = false;
+    let currentTrace = null;
+    let dragOffset = { x: 0, y: 0 };
+
+    function saveState() {
+        history.push(JSON.stringify({ c: components, t: traces }));
+        if (history.length > 20) history.shift();
+    }
+
+    function undo() {
+        if (history.length > 0) {
+            const state = JSON.parse(history.pop());
+            components = state.c;
+            traces = state.t;
+            selectedID = null;
+            draw();
+        }
+    }
+
+    function setMode(m) {
+        mode = m;
+        document.getElementById('btnMove').classList.toggle('active', m === 'MOVE');
+        document.getElementById('btnWire').classList.toggle('active', m === 'WIRE');
+        selectedID = null;
+        currentTrace = null;
+        draw();
+    }
+
+    function updateBoard() {
+        const factor = currentUnit === 'IN' ? ppi * 2.54 : ppi;
+        canvas.width = parseFloat(document.getElementById('pcbW').value) * factor;
+        canvas.height = parseFloat(document.getElementById('pcbH').value) * factor;
+        draw();
+    }
+
+    function toggleUnits() {
+        saveState();
+        const wIn = document.getElementById('pcbW'), hIn = document.getElementById('pcbH');
+        if (currentUnit === 'CM') {
+            wIn.value = (wIn.value / 2.54).toFixed(2);
+            hIn.value = (hIn.value / 2.54).toFixed(2);
+            currentUnit = 'IN';
+        } else {
+            wIn.value = (wIn.value * 2.54).toFixed(1);
+            hIn.value = (hIn.value * 2.54).toFixed(1);
+            currentUnit = 'CM';
+        }
+        document.getElementById('unitBtn').innerText = currentUnit;
+        updateBoard();
+    }
+
+    function addComponent(type) {
+        saveState();
+        const comp = {
+            id: 'comp_' + Date.now(),
+            x: canvas.width/2, y: canvas.height/2,
+            type, rotation: 0,
+            realW: type === 'resistor' ? 0.7 : 0.5,
+            realH: type === 'resistor' ? 0.25 : 0.5,
+            nodes: getNodes(type)
+        };
+        components.push(comp);
+        selectedID = comp.id;
+        draw();
+    }
+
+    function getNodes(type) {
+        if (type === 'resistor') return [{rx:-0.4, ry:0}, {rx:0.4, ry:0}];
+        if (type === 'capacitor') return [{rx:-0.2, ry:0, p:'+'}, {rx:0.2, ry:0, p:'-'}];
+        if (type === 'transistor') return [{rx:-0.15, ry:-0.1}, {rx:0.15, ry:-0.1}, {rx:0, ry:0.15}];
+        return [];
+    }
+
+    canvas.onmousedown = (e) => {
+        const {x, y} = getMouse(e);
+        const scale = currentUnit === 'IN' ? ppi * 2.54 : ppi;
+
+        if (mode === 'MOVE') {
+            // Check for drag handle first
+            if (selectedID && selectedID.startsWith('comp_')) {
+                const sel = components.find(c => c.id === selectedID);
+                const handleY = sel.y + (sel.realH * scale / 2) + 25;
+                if (Math.hypot(x - sel.x, y - handleY) < 15) {
+                    isDragging = true;
+                    dragOffset = { x: x - sel.x, y: y - sel.y };
+                    saveState();
+                    return;
+                }
+            }
+
+            // Select component
+            const hit = components.find(c => Math.hypot(x - c.x, y - c.y) < 30);
+            if (hit) {
+                selectedID = hit.id;
+                document.getElementById('btnDelete').disabled = false;
+            } else {
+                selectedID = null;
+                document.getElementById('btnDelete').disabled = true;
+            }
+        } else {
+            handleWiring(x, y, scale);
+        }
+        draw();
+    };
+
+    canvas.onmousemove = (e) => {
+        const {x, y} = getMouse(e);
+        if (isDragging && selectedID) {
+            const sel = components.find(c => c.id === selectedID);
+            sel.x = Math.round((x - dragOffset.x)/5)*5;
+            sel.y = Math.round((y - dragOffset.y)/5)*5;
+            draw();
+        } else if (currentTrace) {
+            draw(x, y);
+        }
+    };
+
+    canvas.onmouseup = () => { isDragging = false; };
+
+    function deleteSelected() {
+        if (!selectedID) return;
+        saveState();
+        components = components.filter(c => c.id !== selectedID);
+        traces = traces.filter(t => t.id !== selectedID);
+        selectedID = null;
+        document.getElementById('btnDelete').disabled = true;
+        draw();
+    }
+
+    function rotateSelected() {
+        if (!selectedID) return;
+        const sel = components.find(c => c.id === selectedID);
+        if (sel) {
+            saveState();
+            sel.rotation = (sel.rotation + 90) % 360;
+            draw();
+        }
+    }
+
+    function handleWiring(mx, my, scale) {
+        let nodePos = null;
+        components.forEach(c => {
+            c.nodes.forEach(n => {
+                const p = rotatePoint(n.rx*scale, n.ry*scale, c.rotation);
+                if (Math.hypot(mx - (c.x+p.x), my - (c.y+p.y)) < 12) nodePos = {x: c.x+p.x, y: c.y+p.y};
+            });
+        });
+
+        if (!currentTrace && nodePos) {
+            currentTrace = { id: 'trace_'+Date.now(), pts: [nodePos] };
+        } else if (currentTrace) {
+            currentTrace.pts.push({x: mx, y: my});
+            if (nodePos) {
+                currentTrace.pts[currentTrace.pts.length-1] = nodePos;
+                saveState();
+                traces.push(currentTrace);
+                currentTrace = null;
+            }
+        }
+    }
+
+    function rotatePoint(x, y, angle) {
+        const rad = angle * Math.PI / 180;
+        return { x: x * Math.cos(rad) - y * Math.sin(rad), y: x * Math.sin(rad) + y * Math.cos(rad) };
+    }
+
+    function getMouse(e) {
+        const r = canvas.getBoundingClientRect();
+        return { x: e.clientX - r.left, y: e.clientY - r.top };
+    }
+
+    function draw(mx, my) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const scale = currentUnit === 'IN' ? ppi * 2.54 : ppi;
+
+        // Traces
+        ctx.strokeStyle = '#e67e22'; ctx.lineWidth = 3;
+        [...traces, currentTrace].forEach(t => {
+            if(!t) return;
+            ctx.beginPath(); ctx.moveTo(t.pts[0].x, t.pts[0].y);
+            t.pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+            if (t === currentTrace && mx) ctx.lineTo(mx, my);
+            ctx.stroke();
+        });
+
+        // Components
+        components.forEach(c => {
+            ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rotation * Math.PI / 180);
+            const w = c.realW * scale, h = c.realH * scale;
+
+            // Selection Box
+            if (selectedID === c.id) {
+                ctx.strokeStyle = '#00bfff'; ctx.setLineDash([5, 5]); ctx.lineWidth = 1;
+                ctx.strokeRect(-w/2 - 10, -h/2 - 10, w + 20, h + 20);
+                ctx.setLineDash([]);
+            }
+
+            // TO-92 D-Shape
+            if (c.type === 'transistor') {
+                ctx.fillStyle = "#333"; ctx.beginPath();
+                ctx.arc(0, -h/4, w/2, Math.PI, 0); ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2);
+                ctx.closePath(); ctx.fill();
+            } else if (c.type === 'resistor') {
+                ctx.fillStyle = "#d2b48c"; ctx.fillRect(-w/2, -h/2, w, h);
+                ctx.strokeStyle = "#9c8365"; ctx.strokeRect(-w/2, -h/2, w, h);
+            } else {
+                ctx.fillStyle = "#3498db"; ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill();
+            }
+
+            c.nodes.forEach(n => {
+                ctx.fillStyle = (mode === 'WIRE') ? '#00ff00' : '#ff0';
+                ctx.beginPath(); ctx.arc(n.rx*scale, n.ry*scale, 4, 0, Math.PI*2); ctx.fill();
+            });
+            ctx.restore();
+
+            // Drag Handle (below component)
+            if (selectedID === c.id && mode === 'MOVE') {
+                const handleY = (h/2) + 25; 
+                ctx.fillStyle = '#007acc'; ctx.beginPath();
+                ctx.arc(c.x, c.y + handleY, 12, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = 'white'; ctx.font = '14px Arial'; ctx.textAlign = 'center';
+                ctx.fillText('✥', c.x, c.y + handleY + 5);
+            }
+        });
+    }
+
+    updateBoard();
+</script>
+</body>
+</html>
