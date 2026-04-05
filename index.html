@@ -2,28 +2,27 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Precision PCB Designer Pro</title>
+    <title>Precision PCB Designer - Auto-Fit</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; }
-        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 12px; align-items: center; border-bottom: 2px solid #444; flex-wrap: wrap; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
-        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; overflow: auto; padding: 20px; }
-        canvas { background: #002b1a; border: 2px solid #333; cursor: crosshair; }
-        .btn { background: #444; color: white; border: 1px solid #666; padding: 8px 14px; cursor: pointer; border-radius: 4px; font-weight: 500; transition: 0.2s; }
-        .btn:hover { background: #555; border-color: #888; }
-        .btn.active { background: #007acc; border-color: #00bfff; box-shadow: inset 0 0 5px rgba(0,0,0,0.5); }
+        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 12px; align-items: center; border-bottom: 2px solid #444; flex-wrap: wrap; z-index: 10; }
+        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; overflow: hidden; padding: 20px; }
+        canvas { background: #002b1a; border: 2px solid #333; cursor: crosshair; transition: transform 0.2s ease; }
+        .btn { background: #444; color: white; border: 1px solid #666; padding: 8px 14px; cursor: pointer; border-radius: 4px; font-weight: 500; }
+        .btn:hover { background: #555; }
+        .btn.active { background: #007acc; border-color: #00bfff; }
         .btn-danger { background: #c0392b; }
-        .btn-danger:hover { background: #e74c3c; }
-        .unit-toggle { background: #27ae60; font-weight: bold; min-width: 60px; }
+        .unit-toggle { background: #27ae60; font-weight: bold; }
         .input-group { display: flex; align-items: center; gap: 5px; background: #3d3d3d; padding: 5px 10px; border-radius: 4px; }
         input { width: 50px; background: #222; color: #00ff00; border: 1px solid #555; padding: 4px; font-family: monospace; }
         .divider { width: 1px; height: 30px; background: #444; }
+        .hint { position: absolute; bottom: 10px; left: 10px; font-size: 12px; color: #888; pointer-events: none; }
     </style>
 </head>
 <body>
 
 <div id="toolbar">
-    <button id="btnMove" class="btn active" onclick="setMode('MOVE')">✥ MOVE</button>
-    <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ WIRE</button>
+    <button id="btnWire" class="btn" onclick="toggleWireMode()">✎ WIRE MODE</button>
     <div class="divider"></div>
     <button class="btn" onclick="undo()">↶ UNDO</button>
     <button id="btnDelete" class="btn btn-danger" onclick="deleteSelected()">🗑 DELETE</button>
@@ -38,11 +37,12 @@
         <span>×</span>
         <input type="number" id="pcbH" value="8" step="0.1" onchange="updateBoard()">
     </div>
-    <button class="btn" onclick="rotateSelected()" style="background:#8e44ad">↻ ROTATE 90°</button>
+    <button class="btn" onclick="rotateSelected()" style="background:#8e44ad">↻ ROTATE</button>
 </div>
 
 <div id="canvas-container">
     <canvas id="pcbCanvas"></canvas>
+    <div class="hint">Click component to select. Drag ✥ to move. Click nodes to wire.</div>
 </div>
 
 <script>
@@ -50,12 +50,12 @@
     const ctx = canvas.getContext('2d');
     
     let currentUnit = 'CM';
-    let ppi = 37.8; // Standard pixels per cm
+    let ppi = 50; // Base pixels per unit
     let components = [];
     let traces = [];
     let history = [];
     
-    let mode = 'MOVE';
+    let wireMode = false;
     let selectedID = null;
     let isDragging = false;
     let currentTrace = null;
@@ -76,18 +76,30 @@
         }
     }
 
-    function setMode(m) {
-        mode = m;
-        document.getElementById('btnMove').classList.toggle('active', m === 'MOVE');
-        document.getElementById('btnWire').classList.toggle('active', m === 'WIRE');
+    function toggleWireMode() {
+        wireMode = !wireMode;
+        document.getElementById('btnWire').classList.toggle('active', wireMode);
+        selectedID = null;
         currentTrace = null;
         draw();
     }
 
     function updateBoard() {
+        const wVal = parseFloat(document.getElementById('pcbW').value);
+        const hVal = parseFloat(document.getElementById('pcbH').value);
         const factor = currentUnit === 'IN' ? ppi * 2.54 : ppi;
-        canvas.width = parseFloat(document.getElementById('pcbW').value) * factor;
-        canvas.height = parseFloat(document.getElementById('pcbH').value) * factor;
+        
+        canvas.width = wVal * factor;
+        canvas.height = hVal * factor;
+        
+        // Auto-fit logic
+        const container = document.getElementById('canvas-container');
+        const padding = 60;
+        const scaleW = (container.clientWidth - padding) / canvas.width;
+        const scaleH = (container.clientHeight - padding) / canvas.height;
+        const fitScale = Math.min(scaleW, scaleH, 1.5); // Max 1.5x zoom
+        
+        canvas.style.transform = `scale(${fitScale})`;
         draw();
     }
 
@@ -109,12 +121,10 @@
 
     function addComponent(type) {
         saveState();
-        // Sizes based on industry standard converted to inches (normalized internally)
         const comp = {
             id: 'comp_' + Date.now(),
             x: canvas.width / 2, y: canvas.height / 2,
             type, rotation: 0,
-            // Inches: Resistor 1/4W (.25x.1), Cap (.2x.2), TO-92 (.19x.15)
             realW: type === 'resistor' ? 0.25 : (type === 'transistor' ? 0.19 : 0.20),
             realH: type === 'resistor' ? 0.10 : (type === 'transistor' ? 0.15 : 0.20),
             nodes: getNodes(type)
@@ -127,12 +137,7 @@
     function getNodes(type) {
         if (type === 'resistor') return [{rx:-0.2, ry:0}, {rx:0.2, ry:0}];
         if (type === 'capacitor') return [{rx:-0.08, ry:0, p:'+'}, {rx:0.08, ry:0, p:'-'}];
-        // TO-92: Lead Pitch 1.27mm (0.05")
-        if (type === 'transistor') return [
-            {rx:-0.05, ry:-0.04, id:'E'}, // Back Left
-            {rx:0.05, ry:-0.04, id:'C'},  // Back Right
-            {rx:0, ry:0.06, id:'B'}        // Front Center
-        ];
+        if (type === 'transistor') return [{rx:-0.05, ry:-0.04}, {rx:0.05, ry:-0.04}, {rx:0, ry:0.06}];
         return [];
     }
 
@@ -140,23 +145,56 @@
         const {x, y} = getMouse(e);
         const scale = currentUnit === 'IN' ? ppi * 2.54 : ppi;
 
-        if (mode === 'MOVE') {
-            const hit = components.find(c => {
-                const w = (c.realW * scale) + 10;
-                const h = (c.realH * scale) + 10;
-                return x > c.x - w/2 && x < c.x + w/2 && y > c.y - h/2 && y < c.y + h/2;
-            });
+        // 1. Check for Move Handle (Cross Arrow)
+        if (selectedID) {
+            const sel = components.find(c => c.id === selectedID);
+            if (sel) {
+                const hY = (sel.realH * scale / 2) + 30;
+                if (Math.hypot(x - sel.x, y - (sel.y + hY)) < 20) {
+                    isDragging = true;
+                    dragOffset = { x: x - sel.x, y: y - sel.y };
+                    saveState();
+                    return;
+                }
+            }
+        }
 
-            if (hit) {
+        // 2. Check for Nodes (Always clickable for wiring)
+        let nodePos = null;
+        components.forEach(c => {
+            c.nodes.forEach(n => {
+                const p = rotatePoint(n.rx*scale, n.ry*scale, c.rotation);
+                if (Math.hypot(x - (c.x+p.x), y - (c.y+p.y)) < 15) nodePos = {x: c.x+p.x, y: c.y+p.y};
+            });
+        });
+
+        if (nodePos) {
+            if (!currentTrace) currentTrace = { id: 't_'+Date.now(), pts: [nodePos] };
+            else {
+                currentTrace.pts.push(nodePos);
                 saveState();
-                selectedID = hit.id;
-                isDragging = true;
-                dragOffset = { x: x - hit.x, y: y - hit.y };
+                traces.push(currentTrace);
+                currentTrace = null;
+            }
+            draw();
+            return;
+        }
+
+        // 3. Selection Logic (Click component body)
+        const hit = components.find(c => {
+            const w = (c.realW * scale) + 20;
+            const h = (c.realH * scale) + 20;
+            return x > c.x - w/2 && x < c.x + w/2 && y > c.y - h/2 && y < c.y + h/2;
+        });
+
+        if (hit) {
+            selectedID = hit.id;
+        } else {
+            if (currentTrace) {
+                currentTrace.pts.push({x, y});
             } else {
                 selectedID = null;
             }
-        } else {
-            handleWiring(x, y, scale);
         }
         draw();
     };
@@ -187,33 +225,7 @@
     function rotateSelected() {
         if (!selectedID) return;
         const sel = components.find(c => c.id === selectedID);
-        if (sel) {
-            saveState();
-            sel.rotation = (sel.rotation + 90) % 360;
-            draw();
-        }
-    }
-
-    function handleWiring(mx, my, scale) {
-        let nodePos = null;
-        components.forEach(c => {
-            c.nodes.forEach(n => {
-                const p = rotatePoint(n.rx*scale, n.ry*scale, c.rotation);
-                if (Math.hypot(mx - (c.x+p.x), my - (c.y+p.y)) < 12) nodePos = {x: c.x+p.x, y: c.y+p.y};
-            });
-        });
-
-        if (!currentTrace && nodePos) {
-            currentTrace = { id: 'trace_'+Date.now(), pts: [nodePos] };
-        } else if (currentTrace) {
-            currentTrace.pts.push({x: mx, y: my});
-            if (nodePos) {
-                currentTrace.pts[currentTrace.pts.length-1] = nodePos;
-                saveState();
-                traces.push(currentTrace);
-                currentTrace = null;
-            }
-        }
+        if (sel) { saveState(); sel.rotation = (sel.rotation + 90) % 360; draw(); }
     }
 
     function rotatePoint(x, y, angle) {
@@ -223,15 +235,21 @@
 
     function getMouse(e) {
         const r = canvas.getBoundingClientRect();
-        return { x: e.clientX - r.left, y: e.clientY - r.top };
+        const style = window.getComputedStyle(canvas);
+        const matrix = new WebKitCSSMatrix(style.transform);
+        const scale = matrix.a;
+        return { 
+            x: (e.clientX - r.left) / scale, 
+            y: (e.clientY - r.top) / scale 
+        };
     }
 
     function draw(mx, my) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const scale = currentUnit === 'IN' ? ppi * 2.54 : ppi;
 
-        // Trace Rendering
-        ctx.strokeStyle = '#e67e22'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        // Traces
+        ctx.strokeStyle = '#e67e22'; ctx.lineWidth = 3; ctx.lineCap = 'round';
         [...traces, currentTrace].forEach(t => {
             if(!t) return;
             ctx.beginPath(); ctx.moveTo(t.pts[0].x, t.pts[0].y);
@@ -240,7 +258,7 @@
             ctx.stroke();
         });
 
-        // Component Rendering
+        // Components
         components.forEach(c => {
             ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rotation * Math.PI / 180);
             const w = c.realW * scale, h = c.realH * scale;
@@ -251,28 +269,34 @@
                 ctx.setLineDash([]);
             }
 
+            // Shapes
+            ctx.fillStyle = (c.type === 'transistor') ? "#333" : (c.type === 'resistor' ? "#d2b48c" : "#3498db");
             if (c.type === 'transistor') {
-                ctx.fillStyle = "#333"; ctx.beginPath();
-                ctx.arc(0, -h/4, w/2, Math.PI, 0); 
-                ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2);
-                ctx.closePath(); ctx.fill();
-                ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.stroke();
+                ctx.beginPath(); ctx.arc(0, -h/4, w/2, Math.PI, 0); ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2); ctx.fill();
             } else if (c.type === 'resistor') {
-                ctx.fillStyle = "#d2b48c"; ctx.fillRect(-w/2, -h/2, w, h);
-                ctx.strokeStyle = "#9c8365"; ctx.strokeRect(-w/2, -h/2, w, h);
+                ctx.fillRect(-w/2, -h/2, w, h);
             } else {
-                ctx.fillStyle = "#3498db"; ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill();
-                ctx.strokeStyle = "white"; ctx.lineWidth = 1; ctx.stroke();
+                ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill();
             }
 
+            // Nodes (Glow in wire mode or when selected)
             c.nodes.forEach(n => {
-                ctx.fillStyle = (mode === 'WIRE') ? '#00ff00' : (n.p === '+' ? '#ff4d4d' : '#f1c40f');
+                ctx.fillStyle = wireMode ? '#00ff00' : '#ffea00';
                 ctx.beginPath(); ctx.arc(n.rx*scale, n.ry*scale, 4, 0, Math.PI*2); ctx.fill();
             });
             ctx.restore();
+
+            // The Move Handle (Cross Arrow)
+            if (selectedID === c.id) {
+                const hY = (h/2) + 30;
+                ctx.fillStyle = '#007acc'; ctx.beginPath(); ctx.arc(c.x, c.y + hY, 15, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = 'white'; ctx.font = '16px Arial'; ctx.textAlign = 'center';
+                ctx.fillText('✥', c.x, c.y + hY + 6);
+            }
         });
     }
 
+    window.addEventListener('resize', updateBoard);
     updateBoard();
 </script>
 </body>
