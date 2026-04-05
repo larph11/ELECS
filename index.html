@@ -2,41 +2,43 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>PCB Designer - Pro Editor</title>
+    <title>Precision PCB Designer Pro</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; }
-        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 10px; align-items: center; border-bottom: 2px solid #444; flex-wrap: wrap; z-index: 10; }
-        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; overflow: auto; }
+        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 12px; align-items: center; border-bottom: 2px solid #444; flex-wrap: wrap; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; overflow: auto; padding: 20px; }
         canvas { background: #002b1a; border: 2px solid #333; cursor: crosshair; }
-        .btn { background: #444; color: white; border: 1px solid #666; padding: 6px 12px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 5px; }
-        .btn:hover { background: #555; }
-        .btn.active { background: #007acc; border-color: #00bfff; }
+        .btn { background: #444; color: white; border: 1px solid #666; padding: 8px 14px; cursor: pointer; border-radius: 4px; font-weight: 500; transition: 0.2s; }
+        .btn:hover { background: #555; border-color: #888; }
+        .btn.active { background: #007acc; border-color: #00bfff; box-shadow: inset 0 0 5px rgba(0,0,0,0.5); }
         .btn-danger { background: #c0392b; }
-        .btn-undo { background: #7f8c8d; }
-        .unit-toggle { background: #27ae60; font-weight: bold; }
-        input { width: 45px; background: #333; color: white; border: 1px solid #555; padding: 4px; border-radius: 3px; }
-        .divider { width: 1px; height: 25px; background: #555; margin: 0 5px; }
+        .btn-danger:hover { background: #e74c3c; }
+        .unit-toggle { background: #27ae60; font-weight: bold; min-width: 60px; }
+        .input-group { display: flex; align-items: center; gap: 5px; background: #3d3d3d; padding: 5px 10px; border-radius: 4px; }
+        input { width: 50px; background: #222; color: #00ff00; border: 1px solid #555; padding: 4px; font-family: monospace; }
+        .divider { width: 1px; height: 30px; background: #444; }
     </style>
 </head>
 <body>
 
 <div id="toolbar">
-    <div style="display:flex; gap:5px;">
-        <button id="btnMove" class="btn active" onclick="setMode('MOVE')">✥ Move</button>
-        <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ Wire</button>
-    </div>
+    <button id="btnMove" class="btn active" onclick="setMode('MOVE')">✥ MOVE</button>
+    <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ WIRE</button>
     <div class="divider"></div>
-    <button class="btn btn-undo" onclick="undo()">↶ Undo</button>
-    <button id="btnDelete" class="btn btn-danger" onclick="deleteSelected()" disabled>🗑 Delete</button>
+    <button class="btn" onclick="undo()">↶ UNDO</button>
+    <button id="btnDelete" class="btn btn-danger" onclick="deleteSelected()">🗑 DELETE</button>
     <div class="divider"></div>
-    <button class="btn" onclick="addComponent('resistor')">+ Resistor</button>
-    <button class="btn" onclick="addComponent('capacitor')">+ Cap</button>
+    <button class="btn" onclick="addComponent('resistor')">+ RESISTOR</button>
+    <button class="btn" onclick="addComponent('capacitor')">+ CAPACITOR</button>
     <button class="btn" onclick="addComponent('transistor')">+ TO-92</button>
     <div class="divider"></div>
-    <button class="btn unit-toggle" id="unitBtn" onclick="toggleUnits()">CM</button>
-    <input type="number" id="pcbW" value="10" onchange="updateBoard()"> x 
-    <input type="number" id="pcbH" value="8" onchange="updateBoard()">
-    <button class="btn" onclick="rotateSelected()" style="background:#8e44ad">↻ Rotate</button>
+    <div class="input-group">
+        <button class="btn unit-toggle" id="unitBtn" onclick="toggleUnits()">CM</button>
+        <input type="number" id="pcbW" value="10" step="0.1" onchange="updateBoard()">
+        <span>×</span>
+        <input type="number" id="pcbH" value="8" step="0.1" onchange="updateBoard()">
+    </div>
+    <button class="btn" onclick="rotateSelected()" style="background:#8e44ad">↻ ROTATE 90°</button>
 </div>
 
 <div id="canvas-container">
@@ -48,20 +50,20 @@
     const ctx = canvas.getContext('2d');
     
     let currentUnit = 'CM';
-    let ppi = 38;
+    let ppi = 37.8; // Standard pixels per cm
     let components = [];
     let traces = [];
     let history = [];
     
     let mode = 'MOVE';
-    let selectedID = null; // ID of selected component or trace
+    let selectedID = null;
     let isDragging = false;
     let currentTrace = null;
     let dragOffset = { x: 0, y: 0 };
 
     function saveState() {
         history.push(JSON.stringify({ c: components, t: traces }));
-        if (history.length > 20) history.shift();
+        if (history.length > 30) history.shift();
     }
 
     function undo() {
@@ -78,7 +80,6 @@
         mode = m;
         document.getElementById('btnMove').classList.toggle('active', m === 'MOVE');
         document.getElementById('btnWire').classList.toggle('active', m === 'WIRE');
-        selectedID = null;
         currentTrace = null;
         draw();
     }
@@ -108,12 +109,14 @@
 
     function addComponent(type) {
         saveState();
+        // Sizes based on industry standard converted to inches (normalized internally)
         const comp = {
             id: 'comp_' + Date.now(),
-            x: canvas.width/2, y: canvas.height/2,
+            x: canvas.width / 2, y: canvas.height / 2,
             type, rotation: 0,
-            realW: type === 'resistor' ? 0.7 : 0.5,
-            realH: type === 'resistor' ? 0.25 : 0.5,
+            // Inches: Resistor 1/4W (.25x.1), Cap (.2x.2), TO-92 (.19x.15)
+            realW: type === 'resistor' ? 0.25 : (type === 'transistor' ? 0.19 : 0.20),
+            realH: type === 'resistor' ? 0.10 : (type === 'transistor' ? 0.15 : 0.20),
             nodes: getNodes(type)
         };
         components.push(comp);
@@ -122,9 +125,14 @@
     }
 
     function getNodes(type) {
-        if (type === 'resistor') return [{rx:-0.4, ry:0}, {rx:0.4, ry:0}];
-        if (type === 'capacitor') return [{rx:-0.2, ry:0, p:'+'}, {rx:0.2, ry:0, p:'-'}];
-        if (type === 'transistor') return [{rx:-0.15, ry:-0.1}, {rx:0.15, ry:-0.1}, {rx:0, ry:0.15}];
+        if (type === 'resistor') return [{rx:-0.2, ry:0}, {rx:0.2, ry:0}];
+        if (type === 'capacitor') return [{rx:-0.08, ry:0, p:'+'}, {rx:0.08, ry:0, p:'-'}];
+        // TO-92: Lead Pitch 1.27mm (0.05")
+        if (type === 'transistor') return [
+            {rx:-0.05, ry:-0.04, id:'E'}, // Back Left
+            {rx:0.05, ry:-0.04, id:'C'},  // Back Right
+            {rx:0, ry:0.06, id:'B'}        // Front Center
+        ];
         return [];
     }
 
@@ -133,26 +141,19 @@
         const scale = currentUnit === 'IN' ? ppi * 2.54 : ppi;
 
         if (mode === 'MOVE') {
-            // Check for drag handle first
-            if (selectedID && selectedID.startsWith('comp_')) {
-                const sel = components.find(c => c.id === selectedID);
-                const handleY = sel.y + (sel.realH * scale / 2) + 25;
-                if (Math.hypot(x - sel.x, y - handleY) < 15) {
-                    isDragging = true;
-                    dragOffset = { x: x - sel.x, y: y - sel.y };
-                    saveState();
-                    return;
-                }
-            }
+            const hit = components.find(c => {
+                const w = (c.realW * scale) + 10;
+                const h = (c.realH * scale) + 10;
+                return x > c.x - w/2 && x < c.x + w/2 && y > c.y - h/2 && y < c.y + h/2;
+            });
 
-            // Select component
-            const hit = components.find(c => Math.hypot(x - c.x, y - c.y) < 30);
             if (hit) {
+                saveState();
                 selectedID = hit.id;
-                document.getElementById('btnDelete').disabled = false;
+                isDragging = true;
+                dragOffset = { x: x - hit.x, y: y - hit.y };
             } else {
                 selectedID = null;
-                document.getElementById('btnDelete').disabled = true;
             }
         } else {
             handleWiring(x, y, scale);
@@ -180,7 +181,6 @@
         components = components.filter(c => c.id !== selectedID);
         traces = traces.filter(t => t.id !== selectedID);
         selectedID = null;
-        document.getElementById('btnDelete').disabled = true;
         draw();
     }
 
@@ -230,8 +230,8 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const scale = currentUnit === 'IN' ? ppi * 2.54 : ppi;
 
-        // Traces
-        ctx.strokeStyle = '#e67e22'; ctx.lineWidth = 3;
+        // Trace Rendering
+        ctx.strokeStyle = '#e67e22'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
         [...traces, currentTrace].forEach(t => {
             if(!t) return;
             ctx.beginPath(); ctx.moveTo(t.pts[0].x, t.pts[0].y);
@@ -240,44 +240,36 @@
             ctx.stroke();
         });
 
-        // Components
+        // Component Rendering
         components.forEach(c => {
             ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rotation * Math.PI / 180);
             const w = c.realW * scale, h = c.realH * scale;
 
-            // Selection Box
             if (selectedID === c.id) {
-                ctx.strokeStyle = '#00bfff'; ctx.setLineDash([5, 5]); ctx.lineWidth = 1;
-                ctx.strokeRect(-w/2 - 10, -h/2 - 10, w + 20, h + 20);
+                ctx.strokeStyle = '#00bfff'; ctx.setLineDash([4, 4]);
+                ctx.strokeRect(-w/2 - 8, -h/2 - 8, w + 16, h + 16);
                 ctx.setLineDash([]);
             }
 
-            // TO-92 D-Shape
             if (c.type === 'transistor') {
                 ctx.fillStyle = "#333"; ctx.beginPath();
-                ctx.arc(0, -h/4, w/2, Math.PI, 0); ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2);
+                ctx.arc(0, -h/4, w/2, Math.PI, 0); 
+                ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2);
                 ctx.closePath(); ctx.fill();
+                ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.stroke();
             } else if (c.type === 'resistor') {
                 ctx.fillStyle = "#d2b48c"; ctx.fillRect(-w/2, -h/2, w, h);
                 ctx.strokeStyle = "#9c8365"; ctx.strokeRect(-w/2, -h/2, w, h);
             } else {
                 ctx.fillStyle = "#3498db"; ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill();
+                ctx.strokeStyle = "white"; ctx.lineWidth = 1; ctx.stroke();
             }
 
             c.nodes.forEach(n => {
-                ctx.fillStyle = (mode === 'WIRE') ? '#00ff00' : '#ff0';
+                ctx.fillStyle = (mode === 'WIRE') ? '#00ff00' : (n.p === '+' ? '#ff4d4d' : '#f1c40f');
                 ctx.beginPath(); ctx.arc(n.rx*scale, n.ry*scale, 4, 0, Math.PI*2); ctx.fill();
             });
             ctx.restore();
-
-            // Drag Handle (below component)
-            if (selectedID === c.id && mode === 'MOVE') {
-                const handleY = (h/2) + 25; 
-                ctx.fillStyle = '#007acc'; ctx.beginPath();
-                ctx.arc(c.x, c.y + handleY, 12, 0, Math.PI*2); ctx.fill();
-                ctx.fillStyle = 'white'; ctx.font = '14px Arial'; ctx.textAlign = 'center';
-                ctx.fillText('✥', c.x, c.y + handleY + 5);
-            }
         });
     }
 
