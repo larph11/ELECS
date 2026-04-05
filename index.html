@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Hybrid PCB Designer</title>
+    <title>Smart Route PCB</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; touch-action: none; }
         #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 2px solid #444; z-index: 10; justify-content: center; }
         #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; }
         canvas { background: #002b1a; border: 2px solid #333; touch-action: none; }
-        .btn { background: #444; color: white; border: 1px solid #666; padding: 12px 10px; cursor: pointer; border-radius: 6px; font-size: 13px; font-weight: bold; min-width: 65px; }
+        .btn { background: #444; color: white; border: 1px solid #666; padding: 12px 10px; cursor: pointer; border-radius: 6px; font-size: 13px; font-weight: bold; min-width: 60px; }
         .btn.active { background: #007acc; border-color: #00bfff; box-shadow: 0 0 10px #007acc; }
         .btn-danger { background: #c0392b; }
         .input-group { display: flex; align-items: center; gap: 4px; background: #333; padding: 5px; border-radius: 4px; }
@@ -24,9 +24,9 @@
     <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ WIRE</button>
     <button class="btn" onclick="undo()">↶</button>
     <button class="btn btn-danger" onclick="deleteSelected()">🗑</button>
-    <button class="btn" onclick="addComponent('resistor')">+Res</button>
-    <button class="btn" onclick="addComponent('capacitor')">+Cap</button>
-    <button class="btn" onclick="addComponent('transistor')">+T92</button>
+    <button class="btn" onclick="addComponent('resistor')">+R</button>
+    <button class="btn" onclick="addComponent('capacitor')">+C</button>
+    <button class="btn" onclick="addComponent('transistor')">+T</button>
     <button class="btn" onclick="rotateSelected()">↻</button>
     <div class="input-group">
         <input type="number" id="pcbW" value="10" onchange="updateBoard()">
@@ -36,7 +36,7 @@
 
 <div id="canvas-container">
     <canvas id="pcbCanvas"></canvas>
-    <div class="hint">MOVE: Drag ✥ handle. WIRE: Tap nodes to connect.</div>
+    <div class="hint">WIRE: Tap nodes to connect. Tap empty space to add a corner.</div>
 </div>
 
 <script>
@@ -55,7 +55,7 @@
     let mode = 'MOVE';
 
     function saveState() {
-        history.push(JSON.stringify({ c: Array.from(components), t: Array.from(traces) }));
+        history.push(JSON.stringify({ c: JSON.parse(JSON.stringify(components)), t: JSON.parse(JSON.stringify(traces)) }));
         if (history.length > 25) history.shift();
     }
 
@@ -71,8 +71,7 @@
         mode = m;
         document.getElementById('btnMove').classList.toggle('active', mode === 'MOVE');
         document.getElementById('btnWire').classList.toggle('active', mode === 'WIRE');
-        currentTrace = null;
-        draw();
+        currentTrace = null; draw();
     }
 
     function updateBoard() {
@@ -80,7 +79,6 @@
         const hVal = parseFloat(document.getElementById('pcbH').value);
         canvas.width = wVal * ppi;
         canvas.height = hVal * ppi;
-        
         const container = document.getElementById('canvas-container');
         fitScale = Math.min((container.clientWidth - 20) / canvas.width, (container.clientHeight - 20) / canvas.height, 2.5);
         canvas.style.transform = `scale(${fitScale})`;
@@ -100,13 +98,11 @@
             id: 'c' + Date.now(),
             x: canvas.width / 2, y: canvas.height / 2,
             type, rotation: 0,
-            // Physical body dimensions in inches
             realW: type === 'resistor' ? 0.25 : (type === 'transistor' ? 0.19 : 0.20),
             realH: type === 'resistor' ? 0.10 : (type === 'transistor' ? 0.15 : 0.20),
-            // Corrected Node Spacing (True to scale)
             nodes: (type === 'resistor') ? [{rx:-0.2, ry:0}, {rx:0.2, ry:0}] :
-                   (type === 'capacitor') ? [{rx:-0.1, ry:0}, {rx:0.1, ry:0}] : // 0.2" / 5mm pitch
-                   [{rx:-0.05, ry:-0.04}, {rx:0.05, ry:-0.04}, {rx:0, ry:0.06}] // TO-92 pitch
+                   (type === 'capacitor') ? [{rx:-0.1, ry:0}, {rx:0.1, ry:0}] :
+                   [{rx:-0.05, ry:-0.04}, {rx:0.05, ry:-0.04}, {rx:0, ry:0.06}]
         };
         components.push(comp);
         selectedID = comp.id;
@@ -119,7 +115,7 @@
         if (mode === 'MOVE') {
             if (selectedID) {
                 const sel = components.find(c => c.id === selectedID);
-                const hY = (sel.realH * ppi / 2) + 50; // Distance for ✥ handle
+                const hY = (sel.realH * ppi / 2) + 50;
                 if (Math.hypot(x - sel.x, y - (sel.y + hY)) < 35) {
                     isDragging = true;
                     dragOffset = { x: x - sel.x, y: y - sel.y };
@@ -137,17 +133,20 @@
                     const rad = c.rotation * Math.PI / 180;
                     const px = c.x + (n.rx * ppi * Math.cos(rad) - n.ry * ppi * Math.sin(rad));
                     const py = c.y + (n.rx * ppi * Math.sin(rad) + n.ry * ppi * Math.cos(rad));
-                    if (Math.hypot(x - px, y - py) < 25) foundNode = {x: px, y: py};
+                    if (Math.hypot(x - px, y - py) < 25) foundNode = {x: px, y: py, parentId: c.id};
                 });
             });
 
             if (foundNode) {
-                if (!currentTrace) currentTrace = { pts: [foundNode] };
-                else {
+                if (!currentTrace) {
+                    currentTrace = { pts: [foundNode] };
+                } else {
+                    // Logic: Finish wire at pin
                     currentTrace.pts.push(foundNode);
                     saveState(); traces.push(currentTrace); currentTrace = null;
                 }
             } else if (currentTrace) {
+                // Logic: Manual corner point to "route around" objects
                 currentTrace.pts.push({x, y});
             }
         }
@@ -190,44 +189,42 @@
     function draw(mx, my) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // Traces
-        ctx.strokeStyle = '#e67e22'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#ff9f43'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
         [...traces, currentTrace].forEach(t => {
             if(!t) return;
             ctx.beginPath(); ctx.moveTo(t.pts[0].x, t.pts[0].y);
-            t.pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
-            if (t === currentTrace && mx) ctx.lineTo(mx, my);
+            for(let i=1; i < t.pts.length; i++) ctx.lineTo(t.pts[i].x, t.pts[i].y);
+            
+            if (t === currentTrace && mx) {
+                // CLEAN PREVIEW: Draw a 90-degree guide from the last point
+                const last = t.pts[t.pts.length - 1];
+                ctx.lineTo(mx, last.y);
+                ctx.lineTo(mx, my);
+            }
             ctx.stroke();
         });
 
-        // Components
         components.forEach(c => {
             ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rotation * Math.PI / 180);
             const w = c.realW * ppi, h = c.realH * ppi;
             
             if (selectedID === c.id) {
-                ctx.strokeStyle = '#00bfff'; ctx.setLineDash([4, 4]); ctx.lineWidth = 2;
-                ctx.strokeRect(-w/2-15, -h/2-15, w+30, h+30);
+                ctx.strokeStyle = '#00bfff'; ctx.setLineDash([4, 4]); ctx.strokeRect(-w/2-15, -h/2-15, w+30, h+30);
                 ctx.setLineDash([]);
             }
 
             ctx.fillStyle = (c.type === 'transistor') ? "#333" : (c.type === 'resistor' ? "#d2b48c" : "#3498db");
             if (c.type === 'transistor') {
                 ctx.beginPath(); ctx.arc(0, -h/4, w/2, Math.PI, 0); ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2); ctx.fill();
-            } else if (c.type === 'resistor') {
-                ctx.fillRect(-w/2, -h/2, w, h);
-            } else {
-                ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill();
-            }
+            } else if (c.type === 'resistor') { ctx.fillRect(-w/2, -h/2, w, h); }
+            else { ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill(); }
 
-            // Nodes
             c.nodes.forEach(n => {
                 ctx.fillStyle = (mode === 'WIRE') ? '#00ff00' : '#ffea00';
                 ctx.beginPath(); ctx.arc(n.rx*ppi, n.ry*ppi, 5, 0, Math.PI*2); ctx.fill();
             });
             ctx.restore();
 
-            // Handle (Only in MOVE mode)
             if (selectedID === c.id && mode === 'MOVE') {
                 const hY = (h/2) + 50;
                 ctx.fillStyle = '#007acc'; ctx.beginPath(); ctx.arc(c.x, c.y + hY, 25, 0, Math.PI*2); ctx.fill();
@@ -237,7 +234,6 @@
         });
     }
 
-    window.onresize = updateBoard;
     updateBoard();
 </script>
 </body>
