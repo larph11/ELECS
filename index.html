@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PCB Project Manager</title>
+    <title>Pro PCB Designer - Complete Suite</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; touch-action: none; -webkit-user-select: none; }
         #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 2px solid #444; z-index: 100; justify-content: center; }
@@ -14,13 +14,9 @@
         .btn-save { background: #2980b9; }
         .btn-load { background: #8e44ad; }
         .btn-danger { background: #c0392b; }
-        
-        /* Modal for Load List */
         #load-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #2d2d2d; border: 2px solid #007acc; padding: 20px; border-radius: 12px; z-index: 1000; width: 80%; max-width: 300px; box-shadow: 0 0 50px #000; }
-        #load-list { max-height: 200px; overflow-y: auto; margin: 10px 0; }
         .load-item { background: #444; padding: 10px; margin-bottom: 5px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; }
-        
-        #pin-selector { position: absolute; display: none; background: #222; border: 2px solid #00ff00; padding: 12px; border-radius: 12px; flex-direction: column; align-items: center; z-index: 200; box-shadow: 0 0 20px #000; }
+        #pin-selector { position: absolute; display: none; background: #222; border: 2px solid #00ff00; padding: 12px; border-radius: 12px; flex-direction: column; align-items: center; z-index: 200; }
         .pin-grid { display: flex; gap: 8px; }
         .pin-btn { background: #333; color: #0f0; border: 1px solid #0f0; padding: 10px 15px; border-radius: 6px; font-weight: bold; }
     </style>
@@ -32,7 +28,6 @@
     <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ WIRE</button>
     <button class="btn btn-save" onclick="saveProject()">💾 SAVE</button>
     <button class="btn btn-load" onclick="openLoadModal()">📂 LOAD</button>
-    <button class="btn" onclick="undo()">↶</button>
     <button class="btn btn-danger" onclick="deleteSelected()">🗑</button>
     <button class="btn" onclick="addComponent('resistor')">+R</button>
     <button class="btn" onclick="addComponent('capacitor')">+C</button>
@@ -61,64 +56,10 @@
     const pinSelector = document.getElementById('pin-selector');
     const pinButtons = document.getElementById('pin-buttons');
     
-    let ppi = 60, components = [], traces = [], history = [], selectedID = null;
+    let ppi = 60, components = [], traces = [], selectedID = null;
     let isDragging = false, currentTrace = null, fitScale = 1, mode = 'MOVE';
     let activeTraceIdx = -1, activeWaypointIdx = -1;
-    const wireColors = ['#00ffcc', '#ff00ff', '#ffff00', '#0099ff', '#ff5500', '#77ff00', '#ff0055'];
-
-    // --- STORAGE LOGIC ---
-    function saveProject() {
-        const name = prompt("Enter project name:", "My Circuit");
-        if (!name) return;
-        const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
-        allSaves[name] = { components, traces };
-        localStorage.setItem('pcb_library', JSON.stringify(allSaves));
-        alert("Saved: " + name);
-    }
-
-    function openLoadModal() {
-        const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
-        const list = document.getElementById('load-list');
-        list.innerHTML = '';
-        Object.keys(allSaves).forEach(name => {
-            const item = document.createElement('div');
-            item.className = 'load-item';
-            item.innerHTML = `<span>${name}</span><span style="color:#e74c3c" onclick="deleteSave('${name}', event)">✖</span>`;
-            item.onclick = () => loadNamedProject(name);
-            list.appendChild(item);
-        });
-        document.getElementById('load-modal').style.display = 'block';
-    }
-
-    function loadNamedProject(name) {
-        const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
-        const data = allSaves[name];
-        if (data) {
-            components = data.components;
-            traces = data.traces;
-            document.getElementById('load-modal').style.display = 'none';
-            draw();
-        }
-    }
-
-    function deleteSave(name, e) {
-        e.stopPropagation();
-        if (confirm("Delete " + name + "?")) {
-            const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
-            delete allSaves[name];
-            localStorage.setItem('pcb_library', JSON.stringify(allSaves));
-            openLoadModal();
-        }
-    }
-
-    // --- CORE LOGIC ---
-    function updateBoard() {
-        canvas.width = 10 * ppi; canvas.height = 8 * ppi;
-        const container = document.getElementById('canvas-container');
-        fitScale = Math.min((container.clientWidth - 20) / canvas.width, (container.clientHeight - 20) / canvas.height, 2.5);
-        canvas.style.transform = `scale(${fitScale})`;
-        draw();
-    }
+    const wireColors = ['#00ffcc', '#ff00ff', '#ffff00', '#0099ff', '#ff5500', '#77ff00'];
 
     function getPos(e) {
         const rect = canvas.getBoundingClientRect();
@@ -135,18 +76,28 @@
         return { x: p1.x + lambda * (p2.x - p1.x), y: p1.y + lambda * (p2.y - p1.y) };
     }
 
+    function distToSegment(p, v, w) {
+        const l2 = Math.hypot(v.x - w.x, v.y - w.y)**2;
+        if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+        let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+        t = Math.max(0, Math.min(1, t));
+        return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+    }
+
+    function getNodePos(target) {
+        if (!target) return null;
+        if (target.type === 'wire') return { x: target.x, y: target.y };
+        const c = components.find(comp => comp.id === target.compId);
+        if (!c) return null;
+        const n = c.nodes[target.nodeIdx], rad = c.rotation * Math.PI / 180;
+        return { x: c.x + (n.rx*ppi*Math.cos(rad) - n.ry*ppi*Math.sin(rad)), y: c.y + (n.rx*ppi*Math.sin(rad) + n.ry*ppi*Math.cos(rad)) };
+    }
+
     function addComponent(type) {
         let nodes = (type==='resistor'||type==='capacitor') ? [{rx:-0.2, ry:0}, {rx:0.2, ry:0}] : 
                     (type==='transistor') ? [{rx:-0.2, ry:0.1}, {rx:0.2, ry:0.1}, {rx:0, ry:-0.1}] : [{rx:0, ry:0}];
         components.push({ id: 'c'+Date.now(), x: canvas.width/2, y: canvas.height/2, type, rotation: 0, nodes });
         draw();
-    }
-
-    function getNodePos(compId, nodeIdx) {
-        const c = components.find(comp => comp.id === compId);
-        if (!c) return null;
-        const n = c.nodes[nodeIdx], rad = c.rotation * Math.PI / 180;
-        return { x: c.x + (n.rx*ppi*Math.cos(rad) - n.ry*ppi*Math.sin(rad)), y: c.y + (n.rx*ppi*Math.sin(rad) + n.ry*ppi*Math.cos(rad)) };
     }
 
     function startHandler(e) {
@@ -155,59 +106,67 @@
             for (let i = 0; i < traces.length; i++) {
                 for (let j = 0; j < traces[i].waypoints.length; j++) {
                     if (Math.hypot(x - traces[i].waypoints[j].x, y - traces[i].waypoints[j].y) < 20) {
-                        activeTraceIdx = i; activeWaypointIdx = j; isDragging = true;
-                        selectedID = 't' + i; draw(); return;
+                        activeTraceIdx = i; activeWaypointIdx = j; isDragging = true; selectedID = 't' + i; draw(); return;
                     }
                 }
             }
             const comp = components.find(c => Math.hypot(x-c.x, y-c.y) < 35);
-            if (comp) { selectedID = comp.id; isDragging = true; activeTraceIdx = -1; }
+            if (comp) { selectedID = comp.id; isDragging = true; }
         } else if (mode === 'WIRE') {
             const comp = components.find(c => Math.hypot(x-c.x, y-c.y) < 35);
-            if (comp) showPinSelector(comp, e);
-            else if (currentTrace) currentTrace.waypoints.push({x: Math.round(x/5)*5, y: Math.round(y/5)*5});
+            if (comp) {
+                showPinSelector(comp, e);
+            } else {
+                let nearWire = null;
+                traces.forEach(t => {
+                    const pts = [getNodePos(t.start), ...t.waypoints, getNodePos(t.end)];
+                    for(let i=0; i<pts.length-1; i++) {
+                        if(pts[i] && pts[i+1] && distToSegment({x,y}, pts[i], pts[i+1]) < 10) nearWire = {x: Math.round(x/5)*5, y: Math.round(y/5)*5};
+                    }
+                });
+                if (nearWire && confirm("Connect to this wire?")) {
+                    const node = { type: 'wire', x: nearWire.x, y: nearWire.y };
+                    if (!currentTrace) currentTrace = { start: node, end: null, waypoints: [], color: wireColors[Math.floor(Math.random()*wireColors.length)] };
+                    else { currentTrace.end = node; traces.push(currentTrace); currentTrace = null; }
+                } else if (currentTrace) {
+                    currentTrace.waypoints.push({x: Math.round(x/5)*5, y: Math.round(y/5)*5});
+                }
+            }
         }
         draw();
     }
 
     function showPinSelector(comp, e) {
-        pinButtons.innerHTML = '';
-        pinSelector.style.display = 'flex';
-        const rect = canvas.getBoundingClientRect();
+        pinButtons.innerHTML = ''; pinSelector.style.display = 'flex';
         const t = (e.touches && e.touches[0]) ? e.touches[0] : e;
-        pinSelector.style.left = `${Math.min(window.innerWidth - 120, t.clientX - rect.left)}px`;
-        pinSelector.style.top = `${Math.min(window.innerHeight - 120, t.clientY - rect.top)}px`;
-
+        pinSelector.style.left = `${t.clientX - 50}px`; pinSelector.style.top = `${t.clientY - 50}px`;
         comp.nodes.forEach((n, idx) => {
-            const btn = document.createElement('button');
-            btn.className = 'pin-btn';
+            const btn = document.createElement('button'); btn.className = 'pin-btn'; 
             btn.innerText = comp.type === 'terminal' ? 'JOIN' : (idx + 1);
-            btn.onclick = (ev) => {
-                ev.stopPropagation();
-                if (!currentTrace) {
-                    currentTrace = { start: {compId: comp.id, nodeIdx: idx}, end: null, waypoints: [], color: wireColors[Math.floor(Math.random() * wireColors.length)] };
-                } else {
-                    currentTrace.end = {compId: comp.id, nodeIdx: idx};
-                    traces.push(currentTrace); currentTrace = null;
-                }
+            btn.onclick = () => {
+                const node = { compId: comp.id, nodeIdx: idx };
+                if (!currentTrace) currentTrace = { start: node, end: null, waypoints: [], color: wireColors[Math.floor(Math.random()*wireColors.length)] };
+                else { currentTrace.end = node; traces.push(currentTrace); currentTrace = null; }
                 pinSelector.style.display = 'none'; draw();
             };
             pinButtons.appendChild(btn);
         });
     }
 
-    function cancelWire() { currentTrace = null; pinSelector.style.display = 'none'; draw(); }
-
-    function drawSegmentWithJumps(p1, p2, traceID) {
+    function drawSegmentWithJumps(p1, p2, traceIdx) {
         let intersections = [];
         traces.forEach((other, oIdx) => {
-            if (oIdx === traceID) return;
-            const os = getNodePos(other.start.compId, other.start.nodeIdx);
-            const oe = other.end ? getNodePos(other.end.compId, other.end.nodeIdx) : null;
-            let oPts = [os, ...other.waypoints]; if (oe) oPts.push(oe);
+            if (oIdx === traceIdx) return;
+            const os = getNodePos(other.start), oe = getNodePos(other.end);
+            if (!os || !oe) return;
+            let oPts = [os, ...other.waypoints, oe];
             for (let j = 0; j < oPts.length - 1; j++) {
                 const inter = checkIntersect(p1, p2, oPts[j], oPts[j+1]);
-                if (inter) intersections.push(inter);
+                if (inter) {
+                    const isConnected = (traces[traceIdx].start.type === 'wire' && Math.hypot(inter.x - traces[traceIdx].start.x, inter.y - traces[traceIdx].start.y) < 5) || 
+                                      (traces[traceIdx].end && traces[traceIdx].end.type === 'wire' && Math.hypot(inter.x - traces[traceIdx].end.x, inter.y - traces[traceIdx].end.y) < 5);
+                    if (!isConnected) intersections.push(inter);
+                }
             }
         });
         intersections.sort((a, b) => Math.hypot(p1.x - a.x, p1.y - a.y) - Math.hypot(p1.x - b.x, p1.y - b.y));
@@ -221,36 +180,61 @@
 
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        
         traces.forEach((t, tidx) => {
-            const s = getNodePos(t.start.compId, t.start.nodeIdx);
-            const e = t.end ? getNodePos(t.end.compId, t.end.nodeIdx) : null;
+            const s = getNodePos(t.start), e = getNodePos(t.end);
+            if(!s) return;
             let pts = [s, ...t.waypoints]; if(e) pts.push(e);
-            ctx.strokeStyle = t.color; ctx.beginPath(); ctx.moveTo(s.x, s.y);
+            ctx.strokeStyle = t.color; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            ctx.beginPath(); ctx.moveTo(s.x, s.y);
             for(let i=0; i<pts.length-1; i++) drawSegmentWithJumps(pts[i], pts[i+1], tidx);
             ctx.stroke();
+            if (t.start.type === 'wire') { ctx.fillStyle=t.color; ctx.beginPath(); ctx.arc(s.x, s.y, 5, 0, Math.PI*2); ctx.fill(); }
+            if (t.end && t.end.type === 'wire') { ctx.fillStyle=t.color; ctx.beginPath(); ctx.arc(e.x, e.y, 5, 0, Math.PI*2); ctx.fill(); }
             if (mode === 'MOVE') t.waypoints.forEach(p => { ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill(); });
         });
 
         if (currentTrace) {
-            const s = getNodePos(currentTrace.start.compId, currentTrace.start.nodeIdx);
-            ctx.strokeStyle = '#00ff00'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(s.x, s.y);
-            currentTrace.waypoints.forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke(); ctx.setLineDash([]);
+            const s = getNodePos(currentTrace.start);
+            if(s) {
+                ctx.strokeStyle = '#0f0'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(s.x, s.y);
+                currentTrace.waypoints.forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke(); ctx.setLineDash([]);
+            }
         }
 
         components.forEach(c => {
             ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rotation * Math.PI / 180);
-            if (selectedID === c.id) { ctx.strokeStyle = '#00bfff'; ctx.lineWidth = 2; ctx.strokeRect(-25, -20, 50, 40); }
-            ctx.fillStyle = c.type==='terminal'?'#ffea00':(c.type==='transistor'?'#333':(c.type==='capacitor'?'#3498db':'#d2b48c'));
-            if (c.type==='terminal' || c.type==='capacitor') {
-                ctx.beginPath(); ctx.arc(0,0, (c.type==='capacitor'?18:8), 0, Math.PI*2); ctx.fill();
-                if(c.type==='capacitor'){ ctx.fillStyle="white"; ctx.font="bold 14px Arial"; ctx.fillText("+", -12, -4); }
-            } else { ctx.fillRect(-20, -12, 40, 24); }
-            c.nodes.forEach(n => { ctx.fillStyle = '#00ff00'; ctx.beginPath(); ctx.arc(n.rx*ppi, n.ry*ppi, 4, 0, Math.PI*2); ctx.fill(); });
+            if (selectedID === c.id) { ctx.strokeStyle = '#00bfff'; ctx.strokeRect(-25, -20, 50, 40); }
+            ctx.fillStyle = c.type==='terminal'?'#ffea00':(c.type==='capacitor'?'#3498db':'#d2b48c');
+            if (c.type==='capacitor') { ctx.beginPath(); ctx.arc(0,0,18,0,Math.PI*2); ctx.fill(); ctx.fillStyle="white"; ctx.fillText("+",-12,-4); }
+            else if (c.type==='terminal') { ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.fill(); }
+            else { ctx.fillRect(-20,-12,40,24); }
+            c.nodes.forEach(n => { ctx.fillStyle='#0f0'; ctx.beginPath(); ctx.arc(n.rx*ppi, n.ry*ppi, 4, 0, Math.PI*2); ctx.fill(); });
             ctx.restore();
         });
     }
+
+    function saveProject() {
+        const name = prompt("Name project:", "New Circuit");
+        if (!name) return;
+        const lib = JSON.parse(localStorage.getItem('pcb_lib') || '{}');
+        lib[name] = { components, traces };
+        localStorage.setItem('pcb_lib', JSON.stringify(lib));
+        alert("Saved!");
+    }
+
+    function openLoadModal() {
+        const lib = JSON.parse(localStorage.getItem('pcb_lib') || '{}');
+        const list = document.getElementById('load-list'); list.innerHTML = '';
+        Object.keys(lib).forEach(name => {
+            const item = document.createElement('div'); item.className = 'load-item';
+            item.innerHTML = `<span>${name}</span><span style="color:#f44" onclick="deleteProj('${name}', event)">✖</span>`;
+            item.onclick = () => { components = lib[name].components; traces = lib[name].traces; draw(); document.getElementById('load-modal').style.display='none'; };
+            list.appendChild(item);
+        });
+        document.getElementById('load-modal').style.display = 'block';
+    }
+
+    function deleteProj(name, e) { e.stopPropagation(); const lib = JSON.parse(localStorage.getItem('pcb_lib') || '{}'); delete lib[name]; localStorage.setItem('pcb_lib', JSON.stringify(lib)); openLoadModal(); }
 
     window.addEventListener('touchmove', (e) => { 
         if (!isDragging) return;
@@ -263,9 +247,18 @@
 
     window.addEventListener('touchend', () => { isDragging = false; activeTraceIdx = -1; activeWaypointIdx = -1; });
     canvas.addEventListener('touchstart', startHandler);
-    function setMode(m) { mode = m; cancelWire(); document.getElementById('btnMove').className = 'btn ' + (m==='MOVE'?'active':''); document.getElementById('btnWire').className = 'btn ' + (m==='WIRE'?'active':''); draw(); }
-    function deleteSelected() { if(selectedID && selectedID.startsWith('c')) { components = components.filter(c => c.id !== selectedID); traces = traces.filter(t => t.start.compId !== selectedID && t.end.compId !== selectedID); } selectedID = null; draw(); }
-    function rotateSelected() { const c = components.find(comp => comp.id === selectedID); if(c && c.type!=='terminal'){ c.rotation=(c.rotation+90)%360; draw(); } }
+    function setMode(m) { mode = m; draw(); document.getElementById('btnMove').className = 'btn ' + (m==='MOVE'?'active':''); document.getElementById('btnWire').className = 'btn ' + (m==='WIRE'?'active':''); }
+    function rotateSelected() { const c = components.find(comp => comp.id === selectedID); if(c){ c.rotation=(c.rotation+90)%360; draw(); } }
+    function deleteSelected() { components = components.filter(c => c.id !== selectedID); traces = traces.filter(t => (t.start && t.start.compId !== selectedID) && (!t.end || t.end.compId !== selectedID)); selectedID = null; draw(); }
+    function cancelWire() { currentTrace = null; pinSelector.style.display='none'; draw(); }
+    
+    canvas.width = 10 * ppi; canvas.height = 8 * ppi;
+    function updateBoard() {
+        fitScale = Math.min((window.innerWidth - 20) / canvas.width, (window.innerHeight - 150) / canvas.height, 2.5);
+        canvas.style.transform = `scale(${fitScale})`;
+        draw();
+    }
+    window.addEventListener('resize', updateBoard);
     updateBoard();
 </script>
 </body>
