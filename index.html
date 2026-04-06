@@ -3,18 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Smart Route PCB</title>
+    <title>PCB Project Manager</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; touch-action: none; }
-        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 2px solid #444; z-index: 10; justify-content: center; }
-        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1a; color: #eee; overflow: hidden; touch-action: none; -webkit-user-select: none; }
+        #toolbar { background: #2d2d2d; padding: 10px; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 2px solid #444; z-index: 100; justify-content: center; }
+        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #121212; position: relative; overflow: hidden; }
         canvas { background: #002b1a; border: 2px solid #333; touch-action: none; }
-        .btn { background: #444; color: white; border: 1px solid #666; padding: 12px 10px; cursor: pointer; border-radius: 6px; font-size: 13px; font-weight: bold; min-width: 60px; }
-        .btn.active { background: #007acc; border-color: #00bfff; box-shadow: 0 0 10px #007acc; }
+        .btn { background: #444; color: white; border: 1px solid #666; padding: 12px 6px; cursor: pointer; border-radius: 6px; font-size: 11px; font-weight: bold; min-width: 45px; }
+        .btn.active { background: #007acc; border-color: #00bfff; box-shadow: 0 0 8px #007acc; }
+        .btn-save { background: #2980b9; }
+        .btn-load { background: #8e44ad; }
         .btn-danger { background: #c0392b; }
-        .input-group { display: flex; align-items: center; gap: 4px; background: #333; padding: 5px; border-radius: 4px; }
-        input { width: 45px; background: #111; color: #0f0; border: 1px solid #555; padding: 4px; text-align: center; }
-        .hint { position: absolute; bottom: 10px; width: 100%; text-align: center; font-size: 11px; color: #888; pointer-events: none; }
+        
+        /* Modal for Load List */
+        #load-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #2d2d2d; border: 2px solid #007acc; padding: 20px; border-radius: 12px; z-index: 1000; width: 80%; max-width: 300px; box-shadow: 0 0 50px #000; }
+        #load-list { max-height: 200px; overflow-y: auto; margin: 10px 0; }
+        .load-item { background: #444; padding: 10px; margin-bottom: 5px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; }
+        
+        #pin-selector { position: absolute; display: none; background: #222; border: 2px solid #00ff00; padding: 12px; border-radius: 12px; flex-direction: column; align-items: center; z-index: 200; box-shadow: 0 0 20px #000; }
+        .pin-grid { display: flex; gap: 8px; }
+        .pin-btn { background: #333; color: #0f0; border: 1px solid #0f0; padding: 10px 15px; border-radius: 6px; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -22,63 +30,90 @@
 <div id="toolbar">
     <button id="btnMove" class="btn active" onclick="setMode('MOVE')">✥ MOVE</button>
     <button id="btnWire" class="btn" onclick="setMode('WIRE')">✎ WIRE</button>
+    <button class="btn btn-save" onclick="saveProject()">💾 SAVE</button>
+    <button class="btn btn-load" onclick="openLoadModal()">📂 LOAD</button>
     <button class="btn" onclick="undo()">↶</button>
     <button class="btn btn-danger" onclick="deleteSelected()">🗑</button>
     <button class="btn" onclick="addComponent('resistor')">+R</button>
     <button class="btn" onclick="addComponent('capacitor')">+C</button>
     <button class="btn" onclick="addComponent('transistor')">+T</button>
+    <button class="btn" style="background:#d35400" onclick="addComponent('terminal')">+TML</button>
     <button class="btn" onclick="rotateSelected()">↻</button>
-    <div class="input-group">
-        <input type="number" id="pcbW" value="10" onchange="updateBoard()">
-        <input type="number" id="pcbH" value="8" onchange="updateBoard()">
-    </div>
 </div>
 
 <div id="canvas-container">
     <canvas id="pcbCanvas"></canvas>
-    <div class="hint">WIRE: Tap nodes to connect. Tap empty space to add a corner.</div>
+    <div id="pin-selector">
+        <div id="pin-buttons" class="pin-grid"></div>
+        <button class="pin-btn" style="color:#ff4444; border-color:#ff4444; margin-top:5px;" onclick="cancelWire()">CANCEL</button>
+    </div>
+</div>
+
+<div id="load-modal">
+    <h3 style="margin-top:0">Load Project</h3>
+    <div id="load-list"></div>
+    <button class="btn" style="width:100%" onclick="document.getElementById('load-modal').style.display='none'">CLOSE</button>
 </div>
 
 <script>
     const canvas = document.getElementById('pcbCanvas');
     const ctx = canvas.getContext('2d');
+    const pinSelector = document.getElementById('pin-selector');
+    const pinButtons = document.getElementById('pin-buttons');
     
-    let ppi = 45; 
-    let components = [];
-    let traces = [];
-    let history = [];
-    let selectedID = null;
-    let isDragging = false;
-    let currentTrace = null;
-    let dragOffset = { x: 0, y: 0 };
-    let fitScale = 1;
-    let mode = 'MOVE';
+    let ppi = 60, components = [], traces = [], history = [], selectedID = null;
+    let isDragging = false, currentTrace = null, fitScale = 1, mode = 'MOVE';
+    let activeTraceIdx = -1, activeWaypointIdx = -1;
+    const wireColors = ['#00ffcc', '#ff00ff', '#ffff00', '#0099ff', '#ff5500', '#77ff00', '#ff0055'];
 
-    function saveState() {
-        history.push(JSON.stringify({ c: JSON.parse(JSON.stringify(components)), t: JSON.parse(JSON.stringify(traces)) }));
-        if (history.length > 25) history.shift();
+    // --- STORAGE LOGIC ---
+    function saveProject() {
+        const name = prompt("Enter project name:", "My Circuit");
+        if (!name) return;
+        const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
+        allSaves[name] = { components, traces };
+        localStorage.setItem('pcb_library', JSON.stringify(allSaves));
+        alert("Saved: " + name);
     }
 
-    function undo() {
-        if (history.length > 0) {
-            const state = JSON.parse(history.pop());
-            components = state.c; traces = state.t;
-            selectedID = null; draw();
+    function openLoadModal() {
+        const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
+        const list = document.getElementById('load-list');
+        list.innerHTML = '';
+        Object.keys(allSaves).forEach(name => {
+            const item = document.createElement('div');
+            item.className = 'load-item';
+            item.innerHTML = `<span>${name}</span><span style="color:#e74c3c" onclick="deleteSave('${name}', event)">✖</span>`;
+            item.onclick = () => loadNamedProject(name);
+            list.appendChild(item);
+        });
+        document.getElementById('load-modal').style.display = 'block';
+    }
+
+    function loadNamedProject(name) {
+        const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
+        const data = allSaves[name];
+        if (data) {
+            components = data.components;
+            traces = data.traces;
+            document.getElementById('load-modal').style.display = 'none';
+            draw();
         }
     }
 
-    function setMode(m) {
-        mode = m;
-        document.getElementById('btnMove').classList.toggle('active', mode === 'MOVE');
-        document.getElementById('btnWire').classList.toggle('active', mode === 'WIRE');
-        currentTrace = null; draw();
+    function deleteSave(name, e) {
+        e.stopPropagation();
+        if (confirm("Delete " + name + "?")) {
+            const allSaves = JSON.parse(localStorage.getItem('pcb_library') || '{}');
+            delete allSaves[name];
+            localStorage.setItem('pcb_library', JSON.stringify(allSaves));
+            openLoadModal();
+        }
     }
 
+    // --- CORE LOGIC ---
     function updateBoard() {
-        const wVal = parseFloat(document.getElementById('pcbW').value);
-        const hVal = parseFloat(document.getElementById('pcbH').value);
-        canvas.width = wVal * ppi;
-        canvas.height = hVal * ppi;
+        canvas.width = 10 * ppi; canvas.height = 8 * ppi;
         const container = document.getElementById('canvas-container');
         fitScale = Math.min((container.clientWidth - 20) / canvas.width, (container.clientHeight - 20) / canvas.height, 2.5);
         canvas.style.transform = `scale(${fitScale})`;
@@ -87,153 +122,150 @@
 
     function getPos(e) {
         const rect = canvas.getBoundingClientRect();
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        return { x: (clientX - rect.left) / fitScale, y: (clientY - rect.top) / fitScale };
+        const t = (e.touches && e.touches[0]) ? e.touches[0] : e;
+        return { x: (t.clientX - rect.left) / fitScale, y: (t.clientY - rect.top) / fitScale };
+    }
+
+    function checkIntersect(p1, p2, p3, p4) {
+        const det = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+        if (det === 0) return null;
+        const lambda = ((p4.y - p3.y) * (p4.x - p1.x) + (p3.x - p4.x) * (p4.y - p1.y)) / det;
+        const gamma = ((p1.y - p2.y) * (p4.x - p1.x) + (p2.x - p1.x) * (p4.y - p1.y)) / det;
+        if (!(0.1 < lambda && lambda < 0.9) || !(0.1 < gamma && gamma < 0.9)) return null;
+        return { x: p1.x + lambda * (p2.x - p1.x), y: p1.y + lambda * (p2.y - p1.y) };
     }
 
     function addComponent(type) {
-        saveState();
-        const comp = {
-            id: 'c' + Date.now(),
-            x: canvas.width / 2, y: canvas.height / 2,
-            type, rotation: 0,
-            realW: type === 'resistor' ? 0.25 : (type === 'transistor' ? 0.19 : 0.20),
-            realH: type === 'resistor' ? 0.10 : (type === 'transistor' ? 0.15 : 0.20),
-            nodes: (type === 'resistor') ? [{rx:-0.2, ry:0}, {rx:0.2, ry:0}] :
-                   (type === 'capacitor') ? [{rx:-0.1, ry:0}, {rx:0.1, ry:0}] :
-                   [{rx:-0.05, ry:-0.04}, {rx:0.05, ry:-0.04}, {rx:0, ry:0.06}]
-        };
-        components.push(comp);
-        selectedID = comp.id;
+        let nodes = (type==='resistor'||type==='capacitor') ? [{rx:-0.2, ry:0}, {rx:0.2, ry:0}] : 
+                    (type==='transistor') ? [{rx:-0.2, ry:0.1}, {rx:0.2, ry:0.1}, {rx:0, ry:-0.1}] : [{rx:0, ry:0}];
+        components.push({ id: 'c'+Date.now(), x: canvas.width/2, y: canvas.height/2, type, rotation: 0, nodes });
         draw();
     }
 
-    const startAction = (e) => {
+    function getNodePos(compId, nodeIdx) {
+        const c = components.find(comp => comp.id === compId);
+        if (!c) return null;
+        const n = c.nodes[nodeIdx], rad = c.rotation * Math.PI / 180;
+        return { x: c.x + (n.rx*ppi*Math.cos(rad) - n.ry*ppi*Math.sin(rad)), y: c.y + (n.rx*ppi*Math.sin(rad) + n.ry*ppi*Math.cos(rad)) };
+    }
+
+    function startHandler(e) {
         const {x, y} = getPos(e);
-        
         if (mode === 'MOVE') {
-            if (selectedID) {
-                const sel = components.find(c => c.id === selectedID);
-                const hY = (sel.realH * ppi / 2) + 50;
-                if (Math.hypot(x - sel.x, y - (sel.y + hY)) < 35) {
-                    isDragging = true;
-                    dragOffset = { x: x - sel.x, y: y - sel.y };
-                    saveState(); return;
+            for (let i = 0; i < traces.length; i++) {
+                for (let j = 0; j < traces[i].waypoints.length; j++) {
+                    if (Math.hypot(x - traces[i].waypoints[j].x, y - traces[i].waypoints[j].y) < 20) {
+                        activeTraceIdx = i; activeWaypointIdx = j; isDragging = true;
+                        selectedID = 't' + i; draw(); return;
+                    }
                 }
             }
-            const hit = components.find(c => Math.hypot(x - c.x, y - c.y) < 45);
-            if (hit) selectedID = hit.id; else selectedID = null;
-        } 
-        
-        else if (mode === 'WIRE') {
-            let foundNode = null;
-            components.forEach(c => {
-                c.nodes.forEach(n => {
-                    const rad = c.rotation * Math.PI / 180;
-                    const px = c.x + (n.rx * ppi * Math.cos(rad) - n.ry * ppi * Math.sin(rad));
-                    const py = c.y + (n.rx * ppi * Math.sin(rad) + n.ry * ppi * Math.cos(rad));
-                    if (Math.hypot(x - px, y - py) < 25) foundNode = {x: px, y: py, parentId: c.id};
-                });
-            });
-
-            if (foundNode) {
-                if (!currentTrace) {
-                    currentTrace = { pts: [foundNode] };
-                } else {
-                    // Logic: Finish wire at pin
-                    currentTrace.pts.push(foundNode);
-                    saveState(); traces.push(currentTrace); currentTrace = null;
-                }
-            } else if (currentTrace) {
-                // Logic: Manual corner point to "route around" objects
-                currentTrace.pts.push({x, y});
-            }
+            const comp = components.find(c => Math.hypot(x-c.x, y-c.y) < 35);
+            if (comp) { selectedID = comp.id; isDragging = true; activeTraceIdx = -1; }
+        } else if (mode === 'WIRE') {
+            const comp = components.find(c => Math.hypot(x-c.x, y-c.y) < 35);
+            if (comp) showPinSelector(comp, e);
+            else if (currentTrace) currentTrace.waypoints.push({x: Math.round(x/5)*5, y: Math.round(y/5)*5});
         }
         draw();
-    };
-
-    const moveAction = (e) => {
-        if (!isDragging && !currentTrace) return;
-        const {x, y} = getPos(e);
-        if (isDragging && selectedID) {
-            const sel = components.find(c => c.id === selectedID);
-            sel.x = Math.round(x/5)*5; sel.y = Math.round(y/5)*5;
-            draw();
-        } else if (currentTrace) {
-            draw(x, y);
-        }
-        e.preventDefault();
-    };
-
-    canvas.addEventListener('mousedown', startAction);
-    canvas.addEventListener('touchstart', (e) => { startAction(e); e.preventDefault(); }, {passive: false});
-    window.addEventListener('mousemove', moveAction);
-    window.addEventListener('touchmove', (e) => { moveAction(e); }, {passive: false});
-    window.addEventListener('mouseup', () => isDragging = false);
-    window.addEventListener('touchend', () => isDragging = false);
-
-    function deleteSelected() {
-        if (!selectedID) return;
-        saveState();
-        components = components.filter(c => c.id !== selectedID);
-        traces = traces.filter(t => t.id !== selectedID);
-        selectedID = null; draw();
     }
 
-    function rotateSelected() {
-        const sel = components.find(c => c.id === selectedID);
-        if (sel) { saveState(); sel.rotation = (sel.rotation + 90) % 360; draw(); }
-    }
+    function showPinSelector(comp, e) {
+        pinButtons.innerHTML = '';
+        pinSelector.style.display = 'flex';
+        const rect = canvas.getBoundingClientRect();
+        const t = (e.touches && e.touches[0]) ? e.touches[0] : e;
+        pinSelector.style.left = `${Math.min(window.innerWidth - 120, t.clientX - rect.left)}px`;
+        pinSelector.style.top = `${Math.min(window.innerHeight - 120, t.clientY - rect.top)}px`;
 
-    function draw(mx, my) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        ctx.strokeStyle = '#ff9f43'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        [...traces, currentTrace].forEach(t => {
-            if(!t) return;
-            ctx.beginPath(); ctx.moveTo(t.pts[0].x, t.pts[0].y);
-            for(let i=1; i < t.pts.length; i++) ctx.lineTo(t.pts[i].x, t.pts[i].y);
-            
-            if (t === currentTrace && mx) {
-                // CLEAN PREVIEW: Draw a 90-degree guide from the last point
-                const last = t.pts[t.pts.length - 1];
-                ctx.lineTo(mx, last.y);
-                ctx.lineTo(mx, my);
-            }
-            ctx.stroke();
+        comp.nodes.forEach((n, idx) => {
+            const btn = document.createElement('button');
+            btn.className = 'pin-btn';
+            btn.innerText = comp.type === 'terminal' ? 'JOIN' : (idx + 1);
+            btn.onclick = (ev) => {
+                ev.stopPropagation();
+                if (!currentTrace) {
+                    currentTrace = { start: {compId: comp.id, nodeIdx: idx}, end: null, waypoints: [], color: wireColors[Math.floor(Math.random() * wireColors.length)] };
+                } else {
+                    currentTrace.end = {compId: comp.id, nodeIdx: idx};
+                    traces.push(currentTrace); currentTrace = null;
+                }
+                pinSelector.style.display = 'none'; draw();
+            };
+            pinButtons.appendChild(btn);
         });
+    }
+
+    function cancelWire() { currentTrace = null; pinSelector.style.display = 'none'; draw(); }
+
+    function drawSegmentWithJumps(p1, p2, traceID) {
+        let intersections = [];
+        traces.forEach((other, oIdx) => {
+            if (oIdx === traceID) return;
+            const os = getNodePos(other.start.compId, other.start.nodeIdx);
+            const oe = other.end ? getNodePos(other.end.compId, other.end.nodeIdx) : null;
+            let oPts = [os, ...other.waypoints]; if (oe) oPts.push(oe);
+            for (let j = 0; j < oPts.length - 1; j++) {
+                const inter = checkIntersect(p1, p2, oPts[j], oPts[j+1]);
+                if (inter) intersections.push(inter);
+            }
+        });
+        intersections.sort((a, b) => Math.hypot(p1.x - a.x, p1.y - a.y) - Math.hypot(p1.x - b.x, p1.y - b.y));
+        intersections.forEach(inter => {
+            const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+            ctx.lineTo(inter.x - Math.cos(angle)*8, inter.y - Math.sin(angle)*8);
+            ctx.arc(inter.x, inter.y, 8, angle + Math.PI, angle, false);
+        });
+        ctx.lineTo(p2.x, p2.y);
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        
+        traces.forEach((t, tidx) => {
+            const s = getNodePos(t.start.compId, t.start.nodeIdx);
+            const e = t.end ? getNodePos(t.end.compId, t.end.nodeIdx) : null;
+            let pts = [s, ...t.waypoints]; if(e) pts.push(e);
+            ctx.strokeStyle = t.color; ctx.beginPath(); ctx.moveTo(s.x, s.y);
+            for(let i=0; i<pts.length-1; i++) drawSegmentWithJumps(pts[i], pts[i+1], tidx);
+            ctx.stroke();
+            if (mode === 'MOVE') t.waypoints.forEach(p => { ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill(); });
+        });
+
+        if (currentTrace) {
+            const s = getNodePos(currentTrace.start.compId, currentTrace.start.nodeIdx);
+            ctx.strokeStyle = '#00ff00'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(s.x, s.y);
+            currentTrace.waypoints.forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke(); ctx.setLineDash([]);
+        }
 
         components.forEach(c => {
             ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rotation * Math.PI / 180);
-            const w = c.realW * ppi, h = c.realH * ppi;
-            
-            if (selectedID === c.id) {
-                ctx.strokeStyle = '#00bfff'; ctx.setLineDash([4, 4]); ctx.strokeRect(-w/2-15, -h/2-15, w+30, h+30);
-                ctx.setLineDash([]);
-            }
-
-            ctx.fillStyle = (c.type === 'transistor') ? "#333" : (c.type === 'resistor' ? "#d2b48c" : "#3498db");
-            if (c.type === 'transistor') {
-                ctx.beginPath(); ctx.arc(0, -h/4, w/2, Math.PI, 0); ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2); ctx.fill();
-            } else if (c.type === 'resistor') { ctx.fillRect(-w/2, -h/2, w, h); }
-            else { ctx.beginPath(); ctx.arc(0,0,w/2,0,Math.PI*2); ctx.fill(); }
-
-            c.nodes.forEach(n => {
-                ctx.fillStyle = (mode === 'WIRE') ? '#00ff00' : '#ffea00';
-                ctx.beginPath(); ctx.arc(n.rx*ppi, n.ry*ppi, 5, 0, Math.PI*2); ctx.fill();
-            });
+            if (selectedID === c.id) { ctx.strokeStyle = '#00bfff'; ctx.lineWidth = 2; ctx.strokeRect(-25, -20, 50, 40); }
+            ctx.fillStyle = c.type==='terminal'?'#ffea00':(c.type==='transistor'?'#333':(c.type==='capacitor'?'#3498db':'#d2b48c'));
+            if (c.type==='terminal' || c.type==='capacitor') {
+                ctx.beginPath(); ctx.arc(0,0, (c.type==='capacitor'?18:8), 0, Math.PI*2); ctx.fill();
+                if(c.type==='capacitor'){ ctx.fillStyle="white"; ctx.font="bold 14px Arial"; ctx.fillText("+", -12, -4); }
+            } else { ctx.fillRect(-20, -12, 40, 24); }
+            c.nodes.forEach(n => { ctx.fillStyle = '#00ff00'; ctx.beginPath(); ctx.arc(n.rx*ppi, n.ry*ppi, 4, 0, Math.PI*2); ctx.fill(); });
             ctx.restore();
-
-            if (selectedID === c.id && mode === 'MOVE') {
-                const hY = (h/2) + 50;
-                ctx.fillStyle = '#007acc'; ctx.beginPath(); ctx.arc(c.x, c.y + hY, 25, 0, Math.PI*2); ctx.fill();
-                ctx.fillStyle = 'white'; ctx.font = 'bold 22px Arial'; ctx.textAlign = 'center';
-                ctx.fillText('✥', c.x, c.y + hY + 8);
-            }
         });
     }
 
+    window.addEventListener('touchmove', (e) => { 
+        if (!isDragging) return;
+        const {x, y} = getPos(e);
+        const gx = Math.round(x/5)*5, gy = Math.round(y/5)*5;
+        if (activeTraceIdx !== -1) traces[activeTraceIdx].waypoints[activeWaypointIdx] = {x: gx, y: gy};
+        else { const c = components.find(comp => comp.id === selectedID); if (c) { c.x = gx; c.y = gy; } }
+        draw();
+    }, {passive: false});
+
+    window.addEventListener('touchend', () => { isDragging = false; activeTraceIdx = -1; activeWaypointIdx = -1; });
+    canvas.addEventListener('touchstart', startHandler);
+    function setMode(m) { mode = m; cancelWire(); document.getElementById('btnMove').className = 'btn ' + (m==='MOVE'?'active':''); document.getElementById('btnWire').className = 'btn ' + (m==='WIRE'?'active':''); draw(); }
+    function deleteSelected() { if(selectedID && selectedID.startsWith('c')) { components = components.filter(c => c.id !== selectedID); traces = traces.filter(t => t.start.compId !== selectedID && t.end.compId !== selectedID); } selectedID = null; draw(); }
+    function rotateSelected() { const c = components.find(comp => comp.id === selectedID); if(c && c.type!=='terminal'){ c.rotation=(c.rotation+90)%360; draw(); } }
     updateBoard();
 </script>
 </body>
